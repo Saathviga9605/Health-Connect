@@ -2,6 +2,8 @@ DROP TABLE Patients;
 DROP TABLE Doctors;
 DROP TABLE Departments;
 DROP TABLE Authentication;
+DROP TABLE Patient_Audit;
+DROP SEQUENCE Patient_Audit_SEQ;
 
 -- Creating Department table
 CREATE TABLE Departments (
@@ -376,3 +378,113 @@ VALUES (299, 'Anand B', '9844901234', 'Shoulder Pain', 'Physiotherapy', 5, 104);
 INSERT INTO Patients (ID, Name, Contact_Number, Disease_Name, Treatment_Details, Department, Doctor_id)
 VALUES (300, 'Shreya S', '9845012345', 'Skin Allergy', 'Antihistamines', 8, 105);
 
+SET SERVEROUTPUT ON;
+CREATE OR REPLACE PROCEDURE add_doctor(
+    p_doctor_id IN NUMBER,
+    p_doctor_name IN VARCHAR2,
+    p_doctor_department IN NUMBER
+) IS
+BEGIN
+    INSERT INTO Doctors (D_Id, Name, Department)
+    VALUES (p_doctor_id, p_doctor_name, p_doctor_department);
+    COMMIT;
+EXCEPTION
+    WHEN DUP_VAL_ON_INDEX THEN
+        RAISE_APPLICATION_ERROR(-20001, 'Doctor with this ID already exists.');
+    WHEN OTHERS THEN
+        RAISE_APPLICATION_ERROR(-20002, 'An error occurred while adding the doctor: ' || SQLERRM);
+END;
+/
+REM EXECUTE add_doctor(126, 'Radha', 9);
+
+
+CREATE OR REPLACE TRIGGER prevent_duplicate_doctor
+BEFORE INSERT ON doctors
+FOR EACH ROW
+DECLARE
+    v_count NUMBER;
+BEGIN
+    -- Check if a doctor with the same ID already exists
+    SELECT COUNT(*)
+    INTO v_count
+    FROM doctors
+    WHERE d_id = :NEW.d_id;
+
+    -- If a doctor with the same ID exists, raise an error
+    IF v_count > 0 THEN
+        RAISE_APPLICATION_ERROR(-20001, 'Doctor with this ID already exists.');
+    END IF;
+END;
+/
+
+CREATE OR REPLACE TRIGGER check_department_exists
+BEFORE INSERT ON Patients
+FOR EACH ROW
+DECLARE
+    v_count NUMBER;
+BEGIN
+    -- Check if the department exists in the Departments table
+    SELECT COUNT(*)
+    INTO v_count
+    FROM Departments
+    WHERE Dept_id = :NEW.Department;
+
+    -- If the department does not exist, raise an exception
+    IF v_count = 0 THEN
+        RAISE_APPLICATION_ERROR(-20001, 'Department ID does not exist in the Departments table.');
+    END IF;
+END;
+/
+
+commit;
+
+INSERT INTO DOCTORS VALUES (140,'RADHAKRISHNA',10);
+
+-- Create a sequence for generating unique Audit_IDs
+CREATE SEQUENCE Patient_Audit_SEQ START WITH 1 INCREMENT BY 1;
+
+-- Create an audit table
+CREATE TABLE Patient_Audit (
+    Audit_ID INT PRIMARY KEY,
+    Patient_ID INT,
+    Action VARCHAR2(50),
+    Action_Time TIMESTAMP DEFAULT SYSTIMESTAMP
+);
+
+-- Create a trigger for auditing changes
+CREATE OR REPLACE TRIGGER patient_audit_trigger
+AFTER INSERT OR UPDATE OR DELETE ON Patients
+FOR EACH ROW
+DECLARE
+    v_action VARCHAR2(50);
+    v_patient_id INT;
+BEGIN
+    IF INSERTING THEN
+        v_action := 'Inserted';
+        v_patient_id := :NEW.ID; -- Use :NEW for INSERT
+    ELSIF UPDATING THEN
+        v_action := 'Updated';
+        v_patient_id := :OLD.ID; -- Use :OLD for UPDATE
+    ELSIF DELETING THEN
+        v_action := 'Deleted';
+        v_patient_id := :OLD.ID; -- Use :OLD for DELETE
+    END IF;
+
+    INSERT INTO Patient_Audit (Audit_ID, Patient_ID, Action, Action_Time)
+    VALUES (Patient_Audit_SEQ.NEXTVAL, v_patient_id, v_action, SYSTIMESTAMP);
+END patient_audit_trigger;
+/
+
+-- Manually insert values into Patient_Audit (ensure this follows sequence logic)
+INSERT INTO Patient_Audit (Audit_ID, Patient_ID, Action, Action_Time)
+VALUES (Patient_Audit_SEQ.NEXTVAL, 101, 'Inserted', SYSTIMESTAMP);
+
+INSERT INTO Patient_Audit (Audit_ID, Patient_ID, Action, Action_Time)
+VALUES (Patient_Audit_SEQ.NEXTVAL, 102, 'Updated', SYSTIMESTAMP - INTERVAL '2' DAY);
+
+-- Query the table to verify data
+SELECT * FROM Patient_Audit;
+
+
+
+commit;
